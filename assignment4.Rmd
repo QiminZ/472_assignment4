@@ -1,0 +1,1263 @@
+---
+title: "Assignment 4"
+author: "202310601"
+date: "January 7 2024"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+# this chunk contains code that sets global options for the entire .Rmd. 
+# we use include=FALSE to suppress it from the top of the document, but it will still appear in the appendix. 
+
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center') 
+# we set echo=FALSE to suppress code such that it by default does not appear throughout the document. 
+# note: this is different from .Rmd default
+```
+
+```{r load_libraries, message = FALSE,warning = FALSE} 
+# Library for making HTTP requests
+library(httr)
+
+# Library for working with JSON data
+library(jsonlite)
+
+# Library for reading table
+library(data.table)
+
+# library for reading Excel files
+library(readxl)
+
+# Library for data analysis
+library(tidyverse)
+
+# Library for data manipulation and tidying
+library(tidytable)
+
+# Library for handling spatial data
+library(sf)
+
+# Library for creating maps
+library(tmap)
+
+# Library for statistical analysis
+library(rstatix)
+
+# Library for creating interactive tables
+library(DT)
+
+# Library for formatting axes in plots
+library(scales)
+
+# Library for creating interactive network plots
+library(networkD3)
+
+# Library for interactive data visualization
+library(plotly)
+
+# Library for HTML tools
+library(htmltools)
+
+```
+
+## Option 1
+
+My public repository can be found https://github.com/QiminZ/472_assignment4.git
+
+### Introduction:
+
+This research explores potential biases in UK police stop and search practices related to race, age, and gender. It examines data from the UK police database and employs chi-square tests to investigate correlations between these demographics and the outcomes of police stop and search operations.
+
+### Data: 
+
+Data from November 2022 to November 2023 on police stop and search activities across UK departments were utilized in the study. These included details of the search's time, location, object, and outcome, as well as the individual's age, gender, and ethnicity. An API facilitated the download of this data for each department during the specified period. Subsequently, the data was systematically merged, cleaned, and standardized, and any missing or improperly formatted records were removed. This included renaming variables (e.g., from self_defined_ethnicity to SelfDefinedEthnicity) and transforming geolocation data coordinates. Demographic data were sourced from the 2021 UK Census. Additionally, the Police Force Areas map of England and Wales (December 2016 edition) was used to delineate each police force's boundaries. A specially created 'bias' variable identified incidents ending in 'no further action', critical for assessing potential biases. Chi-square tests were ultimately employed to evaluate biases related to gender, age, and race in stop-and-search operations.
+
+```{r load_uk_police_data, eval=FALSE}
+# Define the API URL
+url = 'https://data.police.uk/api/forces'
+
+# Send an HTTP GET request and get the response
+response = GET(url)
+
+# Parse JSON data from the response
+forces = fromJSON(content(response, 'text', encoding = 'UTF-8'), flatten = TRUE)
+
+```
+
+```{r fetch_police_data, eval=FALSE}
+# Create an empty list to store data
+data_list = list()
+
+# Iterate through each police force
+for(force in forces$id) {
+  # Iterate through years
+  for(year in 2022:2023) {
+    # Define the start and end month based on the year
+    start_month <- ifelse(year == 2022, 11, 1)
+    end_month <- ifelse(year == 2023, 11, 12)
+    
+    # Iterate through each month
+    for(month in start_month:end_month)
+      
+      # Construct the date string
+      date = paste0(year, '-', str_pad(month, 2, pad = '0'))
+      
+      # Construct the URL for the API request
+      url = paste0('https://data.police.uk/api/stops-force?force=', force, '&date=', date)
+      
+      # Send an HTTP GET request
+      response = GET(url)
+      
+      # Check if the HTTP request was successful
+      if(http_status(response)$category == 'Success') {
+        # Parse and flatten the JSON data
+        monthly_data = fromJSON(content(response, 'text', encoding = 'UTF-8'), flatten = TRUE)
+        # If the data is not empty, add it to the list, and record the associated police force
+        if(length(monthly_data)!=0){
+          data_list[[length(data_list) + 1]] = monthly_data %>% mutate(force = force)
+        }
+      }
+    }
+  }
+
+# Combine the data from the list into a single data frame
+data = bind_rows(data_list)
+
+```
+
+```{r save_police_data, eval=FALSE}
+# Save the 'data' dataframe to a CSV file 
+write.csv(data, 'data_output.csv')
+
+```
+
+```{r read_saved_data}
+# Read data from the CSV file 
+data = fread('data_output.csv')
+
+```
+
+```{r process_police_data}
+# Extract the required columns from the data
+data = data %>%
+  filter(outcome!='', # Filter out rows with empty outcome
+         involved_person) %>% # Choose rows where 'involved_person' is TRUE
+  
+  # Rename Ethnicity columns 
+  rename(SelfDefinedEthnicity = self_defined_ethnicity, 
+         OfficerDefinedEthnicity = officer_defined_ethnicity) %>% 
+  
+  # Convert latitude and longitude to numeric
+  mutate(latitude = as.numeric(location.latitude),
+         longitude = as.numeric(location.longitude),
+         
+         # Reclassify values in the SelfDefinedEthnicity column
+         SelfDefinedEthnicity = case_when(
+           # Asian category
+           SelfDefinedEthnicity %in% c('Asian/Asian British - Any other Asian background',
+                                       'Asian/Asian British - Bangladeshi',
+                                       'Asian/Asian British - Chinese',
+                                       'Asian/Asian British - Indian',
+                                       'Asian/Asian British - Pakistani') ~ 'Asian',
+           
+           # Black category
+           SelfDefinedEthnicity %in% c('Black/African/Caribbean/Black British - African',
+                                       'Black/African/Caribbean/Black British - Any other Black/African/Caribbean background',
+                                       'Black/African/Caribbean/Black British - Caribbean') ~ 'Black',
+           
+           # Mixed category
+           SelfDefinedEthnicity %in% c('Mixed/Multiple ethnic groups - Any other Mixed/Multiple ethnic background',
+                                       'Mixed/Multiple ethnic groups - White and Asian',
+                                       'Mixed/Multiple ethnic groups - White and Black African',
+                                       'Mixed/Multiple ethnic groups - White and Black Caribbean') ~ 'Mixed',
+           
+           # White category
+           SelfDefinedEthnicity %in% c('White - Any other White background',
+                                       'White - English/Welsh/Scottish/Northern Irish/British',
+                                       'White - Gypsy or Irish Traveller',
+                                       'White - Irish') ~ 'White',
+           
+           # Other category
+           SelfDefinedEthnicity %in% c('Other ethnic group - Any other ethnic group',
+                                       'Other ethnic group - Arab',
+                                       'Other ethnic group - Not stated') ~ 'Other'),
+         
+         # Create a new column 'ethnicity' based on values in OfficerDefinedEthnicity and SelfDefinedEthnicity columns
+         ethnicity = case_when(
+           # If OfficerDefinedEthnicity is not missing, use its value
+           !is.na(OfficerDefinedEthnicity) ~ OfficerDefinedEthnicity,
+           # If OfficerDefinedEthnicity is missing, use the value in SelfDefinedEthnicity
+           is.na(OfficerDefinedEthnicity) ~ SelfDefinedEthnicity)) %>% 
+  
+  # Select the columns to retain for analysis
+  select(datetime,
+         longitude,
+         latitude,
+         outcome,
+         object_of_search,
+         ethnicity,
+         age_range,
+         gender,
+         removal_of_more_than_outer_clothing,
+         force)
+
+```
+
+
+```{r reorder_levels_and_create_bias}
+# Reorder levels of the 'outcome' factor variable
+data = data %>%
+  
+  mutate(outcome = factor(outcome, levels = c('A no further action disposal',
+                                              'Khat or Cannabis warning',
+                                              'Community resolution',
+                                              'Caution (simple or conditional)',
+                                              'Penalty Notice for Disorder',
+                                              'Arrest',
+                                              'Summons / charged by post')),
+         
+         # Create a new variable 'bias' based on the 'outcome' column
+         bias = if_else(outcome=='A no further action disposal',
+                        'Biased',
+                        'No bias'), # If the outcome is 'A no further action disposal', set 'bias' to 'Biased', otherwise set it to 'No bias'
+         
+         # Reorder levels of the 'age_range' variable
+         age_range = fct_relevel(age_range,
+                                 'under 10',
+                                 '10-17',
+                                 '18-24',
+                                 '25-34',
+                                 'over 34'))
+
+```
+
+
+```{r census_data}
+# Read the census data 
+census_data <- read_excel("Ethnic group.xlsx", sheet = "Dataset")
+
+# Summarize the census data for England and Wales
+census_summary <- census_data %>%
+  
+  # Filter data for England and Wales
+  filter(Countries %in% c("England", "Wales")) %>%
+  
+  # Group by the 20 ethnic categories
+  group_by(`Ethnic group (20 categories)`) %>%
+  
+  # Summarize the total observations for each ethnic category
+  summarise(Observation = sum(Observation, na.rm = TRUE)) %>%
+  
+  # Remove grouping
+  ungroup() %>%
+  
+  # Create a new column 'Ethnic_Group' based on the defined categories
+  mutate(Ethnic_Group = case_when(
+    # Asian category
+    `Ethnic group (20 categories)` %in% c("Asian, Asian British or Asian Welsh: Bangladeshi",
+                                           "Asian, Asian British or Asian Welsh: Chinese",
+                                           "Asian, Asian British or Asian Welsh: Indian",
+                                           "Asian, Asian British or Asian Welsh: Pakistani",
+                                           "Asian, Asian British or Asian Welsh: Other Asian") ~ "Asian",
+    
+    # Black category
+    `Ethnic group (20 categories)` %in% c("Black, Black British, Black Welsh, Caribbean or African: African",
+                                           "Black, Black British, Black Welsh, Caribbean or African: Caribbean",
+                                           "Black, Black British, Black Welsh, Caribbean or African: Other Black") ~ "Black",
+    
+    # Mixed category
+    `Ethnic group (20 categories)` %in% c("Mixed or Multiple ethnic groups: White and Asian",
+                                           "Mixed or Multiple ethnic groups: White and Black African",
+                                           "Mixed or Multiple ethnic groups: White and Black Caribbean",
+                                           "Mixed or Multiple ethnic groups: Other Mixed or Multiple ethnic groups") ~ "Mixed",
+    
+    # White category
+    `Ethnic group (20 categories)` %in% c("White: English, Welsh, Scottish, Northern Irish or British",
+                                           "White: Irish",
+                                           "White: Gypsy or Irish Traveller",
+                                           "White: Roma",
+                                           "White: Other White") ~ "White",
+    
+    # Other category
+    TRUE ~ "Other"
+  )) %>%
+  
+  # Group by the newly created 'Ethnic_Group' column
+  group_by(Ethnic_Group) %>%
+  
+  # Summarize the total observation count for each ethnic group
+  summarise(Total_Observation = sum(Observation, na.rm = TRUE))
+
+```
+
+
+### Analysis: 
+
+Figure 1's Sankey diagram provides a clear visual representation of police focus in stopping and searching individuals identified as "Other" and "Black". A majority of searches for "Controlled Drugs" were directed at the "Other" demographic. This diagram also reveals a significant trend: 'White' males, especially those 18 years and older, were frequently subjected to searches. The outcome of a significant majority of police stop and search instances was "No further action", suggesting potential bias in UK police stop and search procedures.
+
+```{r create_sankey_network, fig.width=10}
+# Create a table 'df1' counting occurrences of 'object_of_search' and 'ethnicity'
+df1 = data %>%
+  count(object_of_search,ethnicity) %>%
+  
+  # Drop rows with missing values
+  drop_na() %>% 
+  
+  # Rename the columns
+  rename(start = object_of_search,end = ethnicity)
+
+# Create a table 'df2' counting occurrences of 'ethnicity' and 'age_range'
+df2 = data %>%
+  count(ethnicity,age_range) %>% 
+  # Drop rows with missing values
+  drop_na() %>%
+  # Rename the columns
+  rename(start = ethnicity,end = age_range)
+
+# Create a table 'df3' counting occurrences of 'age_range' and 'gender'
+df3 = data %>%
+  count(age_range,gender) %>% 
+  
+  # Drop rows with missing values
+  drop_na() %>%
+  
+  # Rename the columns
+  rename(start = age_range,end = gender)
+
+# Create a table 'df4' counting occurrences of 'gender' and 'outcome'
+df4 = data %>%
+  count(gender,outcome) %>%
+  
+  # Drop rows with missing values
+  drop_na() %>%
+  
+  # Rename the columns
+  rename(start = gender,end = outcome)
+
+# Create a table 'df5' counting occurrences of 'outcome' and 'removal_of_more_than_outer_clothing'
+df5 = data %>%
+  count(outcome,removal_of_more_than_outer_clothing) %>% 
+  
+  # Drop rows with missing values
+  drop_na() %>%
+  
+  # Rename the columns
+  rename(start = outcome,end = removal_of_more_than_outer_clothing)
+
+# Combine all the tables into one 'df' 
+df = rbind(df1,df2,df3,df4,df5)
+
+# Convert 'start' and 'end' columns to factors
+df$start = as.factor(df$start)
+df$end = as.factor(df$end)
+
+# Create 'network' variable to store the combined data
+network = df
+
+# Create a list of unique factor levels
+factor_list = unique(c(levels(df$start),levels(df$end)))
+
+# Create a list of numeric values for factors
+num_list = 0:(length(factor_list)-1)
+
+# Map factor levels to their corresponding numeric values
+levels(network$start) = num_list[factor_list %in% levels(df$start)]
+levels(network$end) = num_list[factor_list %in% levels(df$end)]
+
+# Convert 'start' and 'end' columns to numeric
+network$start = as.numeric(as.character(network$start))
+network$end = as.numeric(as.character(network$end))
+
+# Create an attribute data frame with node names
+attribute = data.frame(name = c(factor_list))
+
+# Generate a Sankey network visualization
+sankey_plot <- sankeyNetwork(Links = network, # Specify the 'network' data frame for links between
+              Nodes = attribute,  # Specify the 'attribute' data frame for defining node attributes
+              Source = 'start',  # Define the column name in 'network' for the source nodes
+              Target = 'end',  # Define the column name in 'network' for the target nodes
+              Value = 'n',  # Define the column name in 'network' for link values
+              NodeID = 'name', # Define the column name in 'attribute' for node identification
+              fontSize = 8, # Set the font size for node labels 
+              nodeWidth = 20)  # Set the width of the nodes 
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:14px", 
+                      htmltools::tags$h2("Figure 1: Sankey Network Visualization of Stop and Search Data")),
+  sankey_plot
+)
+
+```
+
+
+In racial terms, Figure 2.1's standardized counts are revealing. They show that "Other" and "Black" are the primary targets of police stop and search, with a higher incidence of "Arrest" and "Summons/charged by post". This implies a disproportionate focus on these racial groups. The chi-square test in Results 2.1 indicated a significant correlation (p < 0.05) between racial differences and variation in search outcomes. 
+
+```{r visualize_ethnicity_outcome_proportions, fig.width=10}
+# Remove rows with missing values 
+a <- data %>%
+  drop_na(ethnicity, outcome) %>%
+  
+  # Count occurrences for each combination
+  count(ethnicity, outcome) %>%
+  
+  # Join with census_summary to get population base
+  left_join(census_summary, by = c("ethnicity" = "Ethnic_Group")) %>%
+  
+  # Calculate standardized count based on population
+  mutate(standardized_count = n / (Total_Observation / sum(Total_Observation))) %>%
+  
+  # Group by each outcome category
+  group_by(outcome) %>%
+  
+  # Calculate proportion
+  mutate(proportion = (standardized_count / sum(standardized_count)) * 100, 
+         # Convert proportion to percentage format
+         proportion_text = percent(proportion / 100)) %>%
+  
+  # Replace spaces with line breaks in 'outcome' for better axis readability
+  mutate(outcome = str_replace_all(outcome,' ','\n')) %>%
+  
+  # Reorder the levels of 'outcome'
+  mutate(outcome = factor(outcome, levels = c('A\nno\nfurther\naction\ndisposal',
+                                              'Khat\nor\nCannabis\nwarning',
+                                              'Community\nresolution',
+                                              'Caution\n(simple\nor\nconditional)',
+                                              'Penalty\nNotice\nfor\nDisorder',
+                                              'Arrest',
+                                              'Summons\n/\ncharged\nby\npost'))) %>%
+  # Remove grouping
+  ungroup() 
+  
+# Create a visualization using ggplot
+p <- ggplot(a, aes(x = outcome, y = proportion, fill = ethnicity, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity', position = 'fill') +  
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = scales::percent_format()) +  
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +  
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Outcome',
+       y = 'Standardized Proportion (%)',
+       fill = 'Ethnicity',
+       title = 'Figure 2.1: Standardized Proportion of Ethnicities in Each Outcome') +
+  
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center the title 
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 1, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 6),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom')
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(p, tooltip = "text")
+
+```
+
+
+```{r perform_chi_square_test, warning = FALSE}
+# Perform a chi-square test on the contingency table formed by 'ethnicity' and 'outcome'
+test_result <- chisq_test(x = data$ethnicity,y = data$outcome) %>% 
+  
+  # Display the results
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+                      htmltools::tags$h2('Result 2.1: Chi-square Test for Independence between Ethnicity and Outcome')),
+  test_result
+)
+
+```
+
+Figure 2.2 shows a preference for searching "White" individuals for items like "Crossbows", "Evidence of wildlife", "Game or poaching equipment", "Goods on which duty has not been paid etc." Result 2.2's chi-square test confirms a significant relationship between racial disparities and the intensity of searches. 
+
+```{r visualize_ethnicity_object_of_search_bias_proportions, fig.width=10}
+# Count occurrences for each combination of 'ethnicity', 'object_of_search', and 'bias'
+b <- data %>% 
+  count(ethnicity,object_of_search,bias) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>% 
+  
+  # Join with census_summary to get population base
+  left_join(census_summary, by = c("ethnicity" = "Ethnic_Group")) %>%
+  
+  # Calculate standardized count based on population
+  mutate(standardized_count = n / (Total_Observation / sum(Total_Observation))) %>%
+  
+  # Group by 'ethnicity' and 'object_of_search'
+  group_by(ethnicity,object_of_search) %>%
+  
+  # calculate the percentage based on standardized counts
+  mutate(proportion = standardized_count / sum(standardized_count) * 100) %>% 
+  
+  # Remove grouping
+  ungroup() %>% 
+  
+  # Filter rows where 'bias' is 'Biased
+  filter(bias=='Biased') %>% 
+  
+  # Group by 'object_of_search' 
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportion within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Remove grouping
+  ungroup() %>% 
+  
+  # Replace spaces with line breaks in 'object_of_search' for better axis readability
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert proportion to percentage format
+         proportion_text = scales::percent(proportion)) %>%  
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = ethnicity, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = scales::percent_format()) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Biased Searches (%)',
+       fill = 'Ethnicity',
+       title = 'Figure 2.2: Ethnicity-Based Proportions of Biased Stops and Searches') +
+  
+  # Apply a light theme 
+  theme_light() +
+  
+  # Center-align the plot title 
+  theme(plot.title = element_text(hjust = 0.5), 
+        
+        # Increase the top margin
+        plot.margin = grid::unit(c(1.5, 0, 0, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 6), 
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom')
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(b, tooltip = "text")
+
+```
+
+```{r chi_square_test_ethnicity_removal_clothing}
+# Perform a chi-square test for independence between 'ethnicity' and 'removal_of_more_than_outer_clothing'
+test_result <- chisq_test(x = data$ethnicity,y = data$removal_of_more_than_outer_clothing) %>% 
+  
+  # Display the results in an interactive datatable
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+  htmltools::tags$h2('Result 2.2: Chi-square Test for Independence between Ethnicity and Removal of More Than Outer Clothing')),
+  test_result
+)
+
+```
+
+Additionally, Figures 2.3 and 2.4 demonstrate that although a lower proportion of individuals were requested to undergo a strip search, police were more likely to request "White" individuals to remove more than their outer garments when searched for "Anything to threaten or harm anyone" and "Black" individuals for "Firearms". This underscores a complex racial dynamic in stop-and-search practices.
+
+```{r visualize_ethnicity_removal_clothing, fig.width=10}
+# Count occurrences for each combination of 'ethnicity' and 'removal_of_more_than_outer_clothing'
+c <- data %>% 
+  count(ethnicity,removal_of_more_than_outer_clothing) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>% 
+  
+  # Group by 'ethnicity'
+  group_by(ethnicity) %>%
+  
+  # Calculate the proportion of each combination within its ethnicity
+  mutate(proportion = n / sum(n) * 100,
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion / 100)) %>% 
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = ethnicity,y = proportion,fill = removal_of_more_than_outer_clothing, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = scales::percent_format()) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Ethnicity',
+       y = 'Proportion',
+       fill = 'Remove Clothing',
+       title = 'Figure 2.3: Proportion of Removal of More Than \n Outer Clothing by Ethnicity (Stacked)') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center-align the plot title
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 0, 0), "cm")) 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(c, tooltip = "text") 
+
+```
+
+```{r visualize_ethnicity_object_of_search_removal_clothing_proportions, fig.width=10}
+# Count occurrences for each combination of 'ethnicity', 'object_of_search', and 'removal_of_more_than_outer_clothing'
+d <- data %>% 
+  count(ethnicity,object_of_search,removal_of_more_than_outer_clothing) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>%
+  
+  # Group by 'ethnicity' and 'object_of_search' 
+  group_by(ethnicity,object_of_search) %>% 
+  
+  # Calculate the proportion of each combination within its group
+  mutate(proportion = n/sum(n)) %>% 
+  
+  # Ungroup to perform calculations across the entire dataset
+  ungroup() %>% 
+  
+  # Filter rows where 'removal_of_more_than_outer_clothing' is true
+  filter(removal_of_more_than_outer_clothing) %>%
+  
+  # Group by 'object_of_search'
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportion proportions within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Ungroup to finalize data manipulation
+  ungroup() %>% 
+  
+  # Replace spaces in 'object_of_search' with newline characters for better axis labels
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion)) %>%  
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = ethnicity, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = percent) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Removal Clothing',
+       fill = 'Ethnicity',
+       title = 'Figure 2.4: Proportion of Removal of More Than Outer \n Clothing by Ethnicity and Object of Search') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center-align the plot title 
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 1, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 5),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6),
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom') 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(d, tooltip = "text") 
+
+```
+
+Regarding age, Figure 3.1 highlights that the majority of stop-and-search incidents involved individuals aged 18 and up. 
+
+```{r visualize_age_outcome_proportions, fig.width=10}
+# Count occurrences for each combination of 'age_range' and 'outcome'
+e <- data %>% 
+  count(age_range,outcome) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>% 
+  
+  # Group by 'outcome'
+  group_by(outcome) %>%
+  
+  # Replace spaces with line breaks in 'outcome' for better axis readability
+  mutate(outcome = str_replace_all(outcome,' ','\n')) %>%
+  
+  # Reorder the levels of 'outcome'
+  mutate(outcome = factor(outcome, levels = c('A\nno\nfurther\naction\ndisposal',
+                                              'Khat\nor\nCannabis\nwarning',
+                                              'Community\nresolution',
+                                              'Caution\n(simple\nor\nconditional)',
+                                              'Penalty\nNotice\nfor\nDisorder',
+                                              'Arrest',
+                                              'Summons\n/\ncharged\nby\npost'))) %>%
+  
+  # Calculate the proportion of each combination within its outcome
+  mutate(proportion = n / sum(n),
+         # Convert proportion to percentage format
+         proportion_text = scales::percent(proportion)) %>% 
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = outcome, y = proportion, fill = age_range, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = scales::percent_format()) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Outcome',
+       y = 'Proportion',
+       fill = 'Age Range',
+       title = 'Figure 3.1: Proportion of Age Ranges by Outcome') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center the title
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 1, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 6),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom')
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(e, tooltip = "text") 
+
+```
+
+The chi-square test (Result 3.1) reveals a significant correlation (p < 0.05) between the variance in police search outcomes and age groups. 
+```{r chi_square_test_age_outcome, message = FALSE,warning = FALSE}
+# Perform a chi-square test for independence between 'age_range' and 'outcome'
+test_result <- chisq_test(x = data$age_range,y = data$outcome) %>% 
+  
+  # Display the results
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+  htmltools::tags$h2('Result 3.1: Chi-square Test for Independence between Age and Outcome')),
+  test_result
+)
+
+```
+
+Moreover, Figures 3.2 and 3.3 indicate a pronounced bias in searching for 'Crossbows' within the '25-34' age group. However, when searching for 'Anything to threaten or harm anyone', the police are more likely to ask this age group to remove more than their outer clothing.  
+
+```{r visualize_age_object_of_search_bias_proportions, fig.width=10}
+# Count occurrences for each combination of 'age_range', 'object_of_search', and 'bias'
+f <- data %>% 
+  count(age_range,object_of_search,bias) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>%
+  
+  # Group by 'age_range' and 'object_of_search'
+  group_by(age_range,object_of_search) %>% 
+  
+  # Calculate the proportion of each combination within its group
+  mutate(proportion = n/sum(n)) %>% 
+  
+  # Ungroup to perform calculations across the entire dataset
+  ungroup() %>% 
+  
+  # Filter rows where 'bias' is 'Biased'
+  filter(bias=='Biased') %>% 
+  
+  # Group by 'object_of_search' 
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportions within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Ungroup to finalize data manipulation
+  ungroup() %>% 
+  
+  # Replace spaces in 'object_of_search' with line breaks for better readability
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion)) %>%  
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = age_range, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = percent) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Biased Stop and Search',
+       fill = 'Age',
+       title = 'Figure 3.2: Proportion of Biased Stop and Search by Age and Object of Search') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center-align the plot title 
+  theme(plot.title = element_text(hjust = 0.5), 
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 5), 
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom') 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(f, tooltip = "text") 
+
+```
+
+```{r  visualize_age_object_of_search_removal_clothing_proportions, fig.width=10}
+# Count occurrences for each combination of 'age_range', 'object_of_search', and 'removal_of_more_than_outer_clothing'
+h <- data %>% 
+  count(age_range,object_of_search,removal_of_more_than_outer_clothing) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>%
+  
+  # Group by 'age_range' and 'object_of_search'
+  group_by(age_range,object_of_search) %>% 
+  
+  # Calculate the proportion of occurrences within each group
+  mutate(proportion = n/sum(n)) %>% 
+  
+  # Ungroup to perform calculations across the entire dataset
+  ungroup() %>% 
+  
+  # Filter rows where 'removal_of_more_than_outer_clothing' is true
+  filter(removal_of_more_than_outer_clothing) %>% 
+  
+  # Group by 'object_of_search' 
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportions within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Ungroup to finalize data manipulation
+  ungroup() %>% 
+  
+  # Replace spaces in 'object_of_search' with newline characters for better axis labels
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion)) %>%  
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = age_range, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = percent) +
+  
+  # Use a Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Removal Clothing',
+       fill = 'Age',
+       title = 'Figure 3.3: Proportion of Removal of More Than Outer \n Clothing by Age and Object of Search') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center-align the plot title 
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 0, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 5),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6),
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom') 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(h, tooltip = "text") 
+
+```
+
+Result 3.2 from the chi-square test revealed a significant (p < 0.05) relationship between the 'Removal of More Than Outer Clothing' and age group, underscoring a potential age-related bias in the intensity of police searches.
+
+```{r chi_square_test_age_removal_clothing, warning = FALSE}
+# Perform a Chi-Square Test for Independence between 'age_range' and 'removal_of_more_than_outer_clothing'
+test_result <- chisq_test(x = data$age_range,y = data$removal_of_more_than_outer_clothing) %>% 
+  
+  # Display the results in an interactive data table
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+  htmltools::tags$h2('Result 3.2: Chi-square Test for Independence between Age and Removal of More Than Outer Clothing')),
+  test_result
+)
+
+```
+
+In gender analysis, Figures 4.1 and 4.2 emphasize the predominance of male subjects in police stops and searches. They were often searched for items like "Cash", "Crossbows", etc. 
+
+```{r visualize_gender_outcome_proportions, fig.width=10}
+# Count occurrences for each combination of 'gender' and 'outcome'
+i <- data %>% 
+  count(gender,outcome) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>% 
+  
+  # Group by 'outcome'
+  group_by(outcome) %>%
+  
+  # Replace spaces with line breaks in 'outcome' for better axis readability
+  mutate(outcome = str_replace_all(outcome,' ','\n')) %>%
+  
+  # Reorder the levels of 'outcome'
+  mutate(outcome = factor(outcome, levels = c('A\nno\nfurther\naction\ndisposal',
+                                              'Khat\nor\nCannabis\nwarning',
+                                              'Community\nresolution',
+                                              'Caution\n(simple\nor\nconditional)',
+                                              'Penalty\nNotice\nfor\nDisorder',
+                                              'Arrest',
+                                              'Summons\n/\ncharged\nby\npost'))) %>%
+  
+  # Calculate the proportion of each combination within its gender
+  mutate(proportion = n / sum(n) * 100,
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion / 100)) %>% 
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = outcome, y = proportion, fill = gender, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = scales::percent_format()) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Outcome',
+       y = 'Proportion',
+       fill = 'Gender',
+       title = 'Figure 4.1: Proportion of Outcomes by Gender') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center the title 
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 1, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 6),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom')
+
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(i, tooltip = "text") 
+
+```
+
+```{r visualize_gender_object_of_search_bias_proportions, fig.width=10}
+# Count occurrences for each combination of 'gender', 'object_of_search', and 'bias'
+j <- data %>% 
+  count(gender,object_of_search,bias) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>% 
+  
+  # Group by 'gender' and 'object_of_search' 
+  group_by(gender,object_of_search) %>% 
+  
+  # Calculate the proportion of each combination within its group
+  mutate(proportion = n/sum(n)) %>% 
+  
+  # Ungroup to perform calculations across the entire dataset
+  ungroup() %>% 
+  
+  # Filter rows where 'bias' is 'Biased'
+  filter(bias=='Biased') %>% 
+  
+  # Group by 'object_of_search'
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportions within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Ungroup to finalize data manipulation
+  ungroup() %>% 
+  
+  # Replace spaces with line breaks in 'object_of_search'
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion)) %>% 
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = gender, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = percent) +
+  
+  # Use Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, fill, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Biased Stop and Search',
+       fill = 'Gender',
+       title = 'Figure 4.2: Proportion of Biased Stop and Search by Gender and Object of Search') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center the title
+  theme(plot.title = element_text(hjust = 0.5), 
+        # Set the font size of x-axis
+        axis.text.x = element_text(size = 5),  
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6), 
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom') 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(j, tooltip = "text") 
+
+```
+
+Figures 4.3 further reveal that males were more frequently asked to remove more than outer clothing for searches involving objects like "Anything to threaten or harm anyone", "Firearms", etc. 
+
+```{r visualize_gender_object_of_search_removal_clothing_proportions, fig.width=10}
+# Count occurrences for each combination of 'gender', 'object_of_search', and 'removal_of_more_than_outer_clothing'
+l <- data %>% 
+  count(gender,object_of_search,removal_of_more_than_outer_clothing) %>% 
+  
+  # Drop rows containing missing values
+  drop_na() %>%
+  
+  # Group by 'gender' and 'object_of_search'
+  group_by(gender,object_of_search) %>% 
+  
+  # Calculate the proportion of occurrences within each group
+  mutate(proportion = n/sum(n)) %>% 
+  
+  # Ungroup to perform calculations across the entire dataset
+  ungroup() %>% 
+  
+  # Filter rows where 'removal_of_more_than_outer_clothing' is true
+  filter(removal_of_more_than_outer_clothing) %>% 
+  
+  # Group by 'object_of_search' 
+  group_by(object_of_search) %>% 
+  
+  # Calculate the proportions within each 'object_of_search' group
+  mutate(proportion = proportion/sum(proportion)) %>% 
+  
+  # Ungroup to finalize data manipulation
+  ungroup() %>% 
+  
+  # Replace spaces in 'object_of_search' with newline characters for better axis labels
+  mutate(object_of_search = str_replace_all(object_of_search,' ','\n'),
+         # Convert 'proportion' to percentage format
+         proportion_text = scales::percent(proportion)) %>%  
+  
+  # Visualize the data using ggplot
+  ggplot(aes(x = object_of_search,y = proportion,fill = gender, text = proportion_text)) +
+  
+  # Use stacked bars to represent proportions
+  geom_bar(stat = 'identity',position = 'fill') +
+  
+  # Set y-axis labels in percentage format
+  scale_y_continuous(labels = percent) +
+  
+  # Use a Brewer color palette to set fill colors
+  scale_fill_brewer(palette = 'Blues',direction = 1) +
+  
+  # Set labels for x-axis, y-axis, and the title of the plot
+  labs(x = 'Object of Search',
+       y = 'Proportion of Removal Clothing',
+       fill = 'Gender',
+       title = 'Figure 4.3: Proportion of Removal of More Than \n Outer Clothing by Gender and Object of Search') +
+  
+  # Apply a light theme
+  theme_light() +
+  
+  # Center-align the plot title horizontally
+  theme(plot.title = element_text(hjust = 0.5),
+        # Increase the top margin
+        plot.margin = grid::unit(c(1, 0, 0, 0), "cm"),
+        # Set the font size of x-axis 
+        axis.text.x = element_text(size = 5),
+        # Set the font size of y-axis
+        axis.text.y = element_text(size = 6),
+        # Place the legend at the bottom of the plot
+        legend.position = 'bottom') 
+
+# Convert ggplot object to interactive plot using plotly
+ggplotly(l, tooltip = "text") 
+
+```
+
+Results 4.1 and 4.2 from the chi-square test indicate a significant correlation (p < 0.05) between the variance in police stop and search and gender.
+
+```{r chi_square_test_gender_outcome, warning = FALSE}
+# Perform a chi-square test for independence between 'gender' and 'outcome'
+test_result <- chisq_test(x = data$gender,y = data$outcome) %>% 
+  
+  # Display the results 
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+  htmltools::tags$h2('Result 4.1: Chi-square Test for Independence between Gender and Outcome')),
+  test_result
+)
+
+```
+
+```{r chi_square_test_gender_removal_clothing, warning = FALSE}
+# Perform a chi-square test for independence between 'gender' and 'removal_of_more_than_outer_clothing'
+test_result <- chisq_test(x = data$gender,y = data$removal_of_more_than_outer_clothing) %>% 
+ 
+   # Display the results in an interactive data table
+  datatable()
+
+# Use htmltools to add a title
+htmltools::tagList(
+  htmltools::tags$div(style = "text-align:center; font-size:10px", 
+  htmltools::tags$h2("Result 4.2: Chi-square Test for Independence between Gender and Removal of More Than Outer Clothing")),
+  test_result
+)
+
+```
+
+
+```{r prepare_spatial_data_for_visualization, message=FALSE, warning = FALSE}
+# Read the GeoJSON file containing police force boundaries
+force_boundaries = st_read('Police_Force_Areas_Dec_2016_FCB_in_England_and_Wales_2022.geojson', quiet = TRUE)
+
+# Transform the coordinate reference system (CRS) of the force boundaries to WGS84 (longitude/latitude)
+force_boundaries = st_transform(force_boundaries, crs = "+proj=longlat +datum=WGS84")
+
+# Create a spatial data frame 
+data_sf = data %>% 
+  # Drop rows with missing longitude and latitude values
+  drop_na(longitude,latitude) %>%
+ 
+  # Set the Coordinate Reference System (CRS) to WGS84 (EPSG:4326).
+  st_as_sf(coords = c('longitude', 'latitude'), crs = 4326)
+
+# Perform a spatial join between 'force_boundaries' and 'data_sf'
+data_merged = st_join(force_boundaries, data_sf)
+
+```
+
+
+Figure 5 offers a geographical perspective, showing the distribution of 'bias' in police stop and search practices. Areas like Nottinghamshire, Lincolnshire, Devon and Cornwall, indicated by darker shades, exhibit a higher percentage of bias, indicating that police search behaviour may be influenced by geographic location.
+
+```{r visualize_police_force_area_bias_proportions_map, message=FALSE, warning = FALSE}
+# Set tmap to interactive view mode
+tmap_mode('view')
+
+# Group the data by police force area and 'geometry' column
+bias_map <- data_merged %>% 
+  dplyr::group_by(pfa16nm,geometry) %>% 
+  
+  # Calculate the mean bias as the percentage of 'Biased'
+  dplyr::summarise(bias = mean(bias=='Biased',na.rm = TRUE), .groups = 'drop') %>% 
+  
+  # Remove the grouping
+  ungroup() %>% 
+  
+  # Convert the result to a spatial data frame
+  st_as_sf() %>% 
+  
+  # Create a tmap object
+  tm_shape() +
+  
+  # Add polygons representing the bias information, using a 'Blues' color palette
+  tm_polygons('bias', palette = 'Blues',title = 'Biased Stop and Search (%)') +
+  
+  # Define the layout of the map
+  tm_view(view.legend.position = c('right', 'bottom')) +
+  
+  # Add a title to the map
+  tm_layout(title = 'Figure 5: Proportion of Biased Stop and Search by Police Force Area')
+
+# Print the map
+bias_map
+
+```
+
+
+In conclusion, the findings highlight a significant influence of social bias in UK police stop and search practices. To address these issues, it is recommended that UK police forces enhance anti-bias training and establish audit and community feedback mechanisms, to mitigate social ramifications and bolster public confidence.
+
+### Bibliography
+
+Office for National Statistics. (2022).*Ethnic Group, TS021* [Dataset]. Office for National Statistics. https://www.ons.gov.uk/datasets/TS021/editions/2021/versions/1
+
+
+Office for National Statistics. (2022).*Police Force Areas (December 2016) Full Clipped Boundaries in England and Wales * [Dataset].ONS Geography Office for National Statistics. https://geoportal.statistics.gov.uk/datasets/1c8b832d08eb4f77a453156a29f4b86b/explore?location=52.172257%2C-1.177595%2C7.00
+
+### Code Appendix: All code in this assignment
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE} 
+# this chunk generates the complete code appendix. 
+# eval=FALSE tells R not to run (``evaluate'') the code here (it was already run before).
+```
