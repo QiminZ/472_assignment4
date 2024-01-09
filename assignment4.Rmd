@@ -69,7 +69,7 @@ This research explores potential biases in UK police stop and search practices r
 
 ### Data: 
 
-Data from November 2022 to November 2023 on police stop and search activities across UK departments were utilized in the study. These included details of the search's time, location, object, and outcome, as well as the individual's age, gender, and ethnicity. An API facilitated the download of this data for each department during the specified period. Subsequently, the data was systematically merged, cleaned, and standardized, and any missing or improperly formatted records were removed. This included renaming variables (e.g., from self_defined_ethnicity to SelfDefinedEthnicity) and transforming geolocation data coordinates. Demographic data were sourced from the 2021 UK Census. Additionally, the Police Force Areas map of England and Wales (December 2016 edition) was used to delineate each police force's boundaries. A specially created 'bias' variable identified incidents ending in 'no further action', critical for assessing potential biases. Chi-square tests were ultimately employed to evaluate biases related to gender, age, and race in stop-and-search operations.
+Data from November 2022 to November 2023 on police stop and search activities across UK departments were utilized in the study. These included details of the search's time, location, object, and outcome, as well as the individual's age, gender, and ethnicity. An API facilitated the download of this data for each force during the specified period. Subsequently, the data was systematically merged, cleaned, and standardized, and any missing or improperly formatted records were removed. This included renaming variables (e.g., from self_defined_ethnicity to SelfDefinedEthnicity) and transforming geolocation data coordinates. Demographic data were sourced from the 2021 UK Census. Additionally, the Police Force Areas map of England and Wales (December 2016 edition) was used to delineate each police force's boundaries. A specially created 'bias' variable identified incidents ending in 'no further action', critical for assessing potential biases. Chi-square tests were ultimately employed to evaluate biases related to gender, age, and race in stop-and-search operations.
 
 ```{r load_uk_police_data, eval=FALSE}
 # Define the API URL
@@ -390,7 +390,7 @@ htmltools::tagList(
 ```
 
 
-In racial terms, Figure 2.1's standardized counts are revealing. They show that "Other" and "Black" are the primary targets of police stop and search, with a higher incidence of "Arrest" and "Summons/charged by post". This implies a disproportionate focus on these racial groups. The chi-square test in Results 2.1 indicated a significant correlation (p < 0.05) between racial differences and variation in search outcomes. 
+The data was initially standardized, meaning the incidence of events for each racial group was aligned with their population proportion. Figure 2.1 reveals that "Other" and "Black" racial groups are the primary targets of police stop and search, with a notably higher frequency of "Arrest" and "Summons/charged by post", indicating a disproportionate focus on these groups. The chi-square test in Results 2.1 demonstrates a significant correlation (p < 0.05) between racial differences and the variability in search outcomes. 
 
 ```{r visualize_ethnicity_outcome_proportions, fig.width=10}
 # Remove rows with missing values 
@@ -483,7 +483,7 @@ htmltools::tagList(
 
 ```
 
-Figure 2.2 shows a preference for searching "White" individuals for items like "Crossbows", "Evidence of wildlife", "Game or poaching equipment", "Goods on which duty has not been paid etc." Result 2.2's chi-square test confirms a significant relationship between racial disparities and the intensity of searches. 
+Meanwhile, Figure 2.2 shows a preference for searching "White" individuals for items like "Crossbows", "Evidence of wildlife", etc. Result 2.2's chi-square test confirms a significant relationship between racial disparities and the intensity of searches.
 
 ```{r visualize_ethnicity_object_of_search_bias_proportions, fig.width=10}
 # Count occurrences for each combination of 'ethnicity', 'object_of_search', and 'bias'
@@ -579,7 +579,7 @@ htmltools::tagList(
 
 ```
 
-Additionally, Figures 2.3 and 2.4 demonstrate that although a lower proportion of individuals were requested to undergo a strip search, police were more likely to request "White" individuals to remove more than their outer garments when searched for "Anything to threaten or harm anyone" and "Black" individuals for "Firearms". This underscores a complex racial dynamic in stop-and-search practices.
+Furthermore, Figures 2.3 and 2.4 demonstrate that although a lower proportion of individuals were requested to undergo a strip search, police were more likely to request "White" individuals to remove more than their outer garments when searched for "Anything to threaten or harm anyone" and "Black" individuals for "Firearms". This underscores a complex racial dynamic in stop-and-search practices.
 
 ```{r visualize_ethnicity_removal_clothing, fig.width=10}
 # Count occurrences for each combination of 'ethnicity' and 'removal_of_more_than_outer_clothing'
